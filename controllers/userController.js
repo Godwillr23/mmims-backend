@@ -1,104 +1,88 @@
 const { querySQLServer } = require('../sqlService');
-// const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-
-// Register user
-exports.register = async (req, res) => {
-  const {
-    FirstName,
-    LastName,
-    ProjId,
-    UserRole,
-    ActiveStatus,
-    DateCreated,
-    Username,
-    Email,
-    Password
-  } = req.body;
-
-  try {
-    const hashedPassword = await bcrypt.hash(Password, 10);
-
-    await querySQLServer(`INSERT INTO AppUserTable (
-       Firstname, Lastname, ProjId, UserRole, ActiveStatus, DateCreated, Username, Email, LogPassword
-      ) VALUES (
-        '${FirstName}', '${LastName}', '${ProjId}', '${UserRole}', '${ActiveStatus}',
-        '${DateCreated}', '${Username}', '${Email}',
-        '${hashedPassword}')`);
-
-    res.status(201).json({ message: 'User registered' });
-  } catch (err) {
-    console.error('Register error:', err);
-    res.status(400).json({ error: err.message });
-  }
-};
 
 // Login user
 exports.login = async (req, res) => {
   const { Username, Password } = req.body;
 
+  if (!Username || !Password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+
   try {
-    const sqlUsers = await querySQLServer(`SELECT * FROM AppUserTable WHERE Username = '${Username}'`);
-    if (sqlUsers.length === 0) {
+    const sql = `SELECT * FROM AppUserTable WHERE Username = @Username`;
+    const users = await querySQLServer(sql, [{ name: 'Username', value: Username }]);
+
+    if (users.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const sqlUser = sqlUsers[0];
+    const user = users[0];
 
-    // Compare password with stored bcrypt-hashed password in SQL
-    const matchSQL = await bcrypt.compare(Password, sqlUser.LogPassword);
-    if (!matchSQL) return res.status(401).json({ error: 'Invalid credentials' });
+    const match = await bcrypt.compare(Password, user.LogPassword);
+    if (!match) return res.status(401).json({ error: 'Invalid credentials' });
 
-    const token = jwt.sign({ id: sqlUser.ID }, process.env.JWT_SECRET);
-    res.json({ 
-      token, 
-      userId:sqlUser.ID , 
-      status: 'success'
-    });
+    const token = jwt.sign(
+      { id: user.ID, role: user.UserRole },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    res.json({ token, userId: user.ID, status: 'success' });
 
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
+
 
 
 // Add Login History
 exports.loginHistory = async (req, res) => {
-  const {
-    UserId,
-    ProjId,
-    LoginDate,
-    LoginTime,
-    Longitude,
-    Latitude,
-  } = req.body;
-  try {
-    await querySQLServer(`INSERT INTO LoginTrackingTable (
-       UserId,ProjId, LoginDate, LoginTime, Longitude, Latitude) VALUES (
-        '${UserId}', '${ProjId}', '${LoginDate}', '${LoginTime}', '${Longitude}',
-        '${Latitude}')`);
+  const { UserId, ProjId, Longitude, Latitude } = req.body;
 
-    res.status(201).json({ message: 'User History added successfully' });
+  const loginDate = new Date(); // current date/time
+
+  const sql = `
+    INSERT INTO LoginTrackingTable (UserId, ProjId, LoginDate, LoginTime, Longitude, Latitude)
+    VALUES (@UserId, @ProjId, @LoginDate, @LoginTime, @Longitude, @Latitude)
+  `;
+
+  const params = [
+    { name: 'UserId', value: UserId },
+    { name: 'ProjId', value: ProjId },
+    { name: 'LoginDate', value: loginDate.toISOString().split('T')[0] },
+    { name: 'LoginTime', value: loginDate.toISOString().split('T')[1].slice(0, 8) },
+    { name: 'Longitude', value: Longitude },
+    { name: 'Latitude', value: Latitude },
+  ];
+
+  try {
+    await querySQLServer(sql, params);
+    res.status(201).json({ message: 'Login history recorded' });
   } catch (err) {
-    console.error('error:', err);
+    console.error('Login history error:', err);
     res.status(400).json({ error: err.message });
   }
 };
+
 
 
 // Get user details by ID
 exports.getUserDetails = async (req, res) => {
   const userId = req.params.id;
 
-  try {
-    const users = await querySQLServer(`SELECT 
-      ID,ActiveStatus,Age,CellNo,DateCreated,DurationDrivingExp,Email,EmploymentContract,EmploymentDate,
-      FirstName,Gender,HasDriversLicence,ImageURL,LastName,LicenceCode,LicenceExpDate,LicenceIssueDate,
-      LicenceNo,MMIMSAllocatedNo,MiddleName,ProjId,TeamLeader,UserRole,Username
-      FROM AppUserTable WHERE ID = '${userId}'`);
+  if (!userId || isNaN(userId)) {
+    return res.status(400).json({ error: 'Invalid user ID' });
+  }
 
+  const sql = `SELECT * FROM AppUserTable WHERE ID = @UserId`;
+  const params = [{ name: 'UserId', value: userId }];
+
+  try {
+    const users = await querySQLServer(sql, params);
     if (users.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -106,36 +90,41 @@ exports.getUserDetails = async (req, res) => {
     res.status(200).json(users[0]);
   } catch (err) {
     console.error('Get user details error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Server error' });
   }
 };
 
 // Add ProfileUpdateTable
 exports.profileToUpdate = async (req, res) => {
-  const {
-    UserId,
-    ProjId,
-    UpdateFor,
-    UpdateTo,
-    UpdateStatus,
-    DateCreated,
-  } = req.body;
+  const { UserId, ProjId, UpdateFor, UpdateTo, UpdateStatus } = req.body;
+  const DateCreated = new Date().toISOString();
+
+  const sql = `
+    INSERT INTO ProfileUpdateTable (
+      UserId, ProjId, UpdateFor, UpdateTo, UpdateStatus, DateCreated
+    ) VALUES (
+      @UserId, @ProjId, @UpdateFor, @UpdateTo, @UpdateStatus, @DateCreated
+    )
+  `;
+
+  const params = [
+    { name: 'UserId', value: UserId },
+    { name: 'ProjId', value: ProjId },
+    { name: 'UpdateFor', value: UpdateFor },
+    { name: 'UpdateTo', value: UpdateTo },
+    { name: 'UpdateStatus', value: UpdateStatus },
+    { name: 'DateCreated', value: DateCreated },
+  ];
+
   try {
-    await querySQLServer(`INSERT INTO ProfileUpdateTable (
-       UserId,ProjId, UpdateFor, UpdateTo, UpdateStatus, DateCreated) VALUES (
-        '${UserId}', '${ProjId}', '${UpdateFor}', '${UpdateTo}', '${UpdateStatus}',
-        '${DateCreated}')`);
-
-    res.status(201).json({ 
-      message: 'Data Added successfully' ,
-      status: 'success'
-    });
-
+    await querySQLServer(sql, params);
+    res.status(201).json({ message: 'Data added successfully', status: 'success' });
   } catch (err) {
-    console.error('error:', err);
+    console.error('Error:', err);
     res.status(400).json({ error: err.message });
   }
 };
+
 
 // Update user details by ID
 // exports.updateUser = async (req, res) => {

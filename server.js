@@ -3,7 +3,12 @@ const express = require('express');
 const sql = require('mssql');
 const cors = require('cors');
 const sqlConfig = require('./sqlConfig');
-const userRoutes = require('./routes/userRoutes');
+
+//Routes
+const userRoutes = require('./routes/userRoate');
+const prefieldRoutes = require('./routes/prefieldRoate');
+const documentRoutes = require('./routes/checklistRoate');
+
 const dotenv = require('dotenv');
 dotenv.config();
 
@@ -19,8 +24,11 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
+
 // Routes
-app.use('/api/users', userRoutes);
+app.use('/api/user', userRoutes);
+app.use('/api/prefield', prefieldRoutes);
+app.use('/api/checklist', documentRoutes);
 
 // Port
 const PORT = process.env.PORT || 5000;
